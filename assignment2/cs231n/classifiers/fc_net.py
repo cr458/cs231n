@@ -249,29 +249,31 @@ class FullyConnectedNet(object):
         # self.bn_params[1] to the forward pass for the second batch normalization #
         # layer, etc.                                                              #
         ############################################################################
-        outputs = {}
+        output_cache = {}
+        dropout_cache = {}
         layer_input = X
-        for i in range(self.num_layers):
-            idx = i+1
-            w_idx = 'W'+str(idx)
-            b_idx = 'b' + str(idx)
-            h_idx = 'h' + str(idx)
-            hcache_idx = 'hcache' + str(idx)
-            W = self.params[w_idx]
-            b = self.params[b_idx]
-            if idx == self.num_layers:
-                outputs[h_idx],outputs[hcache_idx] = affine_forward(layer_input,W,b)
+        for i in range(self.num_layers-1):
+            W = self.params['W'+str(i+1)]
+            b = self.params['b'+str(i+1)]
+            if self.use_batchnorm:
+                gamma = self.params['gamma'+str(i+1)]
+                beta = self.params['beta'+str(i+1)]
+                bn_param = self.bn_params[i]
+                hidden_output,output_cache[i] = affine_norm_relu_forward(layer_input,W,b,gamma,beta,bn_param)
+                layer_input = hidden_output
             else:
-                if self.use_batchnorm:
-                    gamma = self.params['gamma'+str(idx)]
-                    beta = self.params['beta'+str(idx)]
-                    bn_param = self.bn_params[i]
-                    outputs[h_idx],outputs[hcache_idx] = affine_norm_relu_forward(layer_input,W,b,gamma,beta,bn_param)
-                    layer_input = outputs[h_idx]
-                else:
-                    outputs[h_idx], outputs[hcache_idx] = affine_relu_forward(layer_input,W,b)
-                    layer_input = outputs[h_idx]
-        scores = outputs['h'+str(self.num_layers)]
+                hidden_output, output_cache[i] = affine_relu_forward(layer_input,W,b)
+                layer_input = hidden_output
+            if self.use_dropout:
+                hidden_output, dropout_cache[i] = dropout_forward(layer_input,self.dropout_param)
+                layer_input = hidden_output
+        
+        out, output_cache[self.num_layers-1] = affine_forward(
+                hidden_output,
+                self.params['W%d'%(self.num_layers)],
+                self.params['b%d'%(self.num_layers)]
+                )
+        scores = out
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -300,29 +302,29 @@ class FullyConnectedNet(object):
             reg_loss += 0.5 * self.reg * np.sum(weight**2)
         loss = data_loss + reg_loss
 
-        hidden_dict= {}
-        hidden_dict['h0'] = X
-        for i in reversed(range(self.num_layers)):
-            idx = i + 1
-            hcache = outputs['hcache'+str(idx)]
-            if idx == self.num_layers:
-                dh,dw,db = affine_backward(dscores,hcache)
+        hcache = output_cache[self.num_layers-1]
+        dh,dw,db = affine_backward(dscores,hcache)
+        dw += self.reg*self.params['W'+str(self.num_layers)]
+        dhout = dh
+        grads['W'+str(self.num_layers)] = dw
+        grads['b'+str(self.num_layers)] = db
+        for i in reversed(range(self.num_layers-1)):
+            idx = i+1
+            hcache = output_cache[i]
+            if self.use_dropout:
+                drop_cache = dropout_cache[i]
+                dhout = dropout_backward(dhout,drop_cache)
+            if self.use_batchnorm:
+                dh,dw,db,dgamma,dbeta = affine_norm_relu_backward(dhout,hcache)
                 dw += self.reg*self.params['W'+str(idx)]
+                grads['gamma'+str(idx)] = dgamma
+                grads['beta'+str(idx)] = dbeta
             else:
-                if self.use_batchnorm:
-                    dh_input = hidden_dict['h'+str(idx+1)]
-                    dh,dw,db,dgamma,dbeta = affine_norm_relu_backward(dh_input,hcache)
-                    dw += self.reg*self.params['W'+str(idx)]
-                    grads['gamma'+str(idx)] = dgamma
-                    grads['beta'+str(idx)] = dbeta
-                else:
-                    dh_input = hidden_dict['h'+str(idx+1)]
-                    dh,dw,db = affine_relu_backward(dh_input,hcache)
-                    dw += self.reg*self.params['W'+str(idx)]
+                dh,dw,db = affine_relu_backward(dhout,hcache)
+                dw += self.reg*self.params['W'+str(idx)]
             grads['W'+str(idx)] = dw
             grads['b'+str(idx)] = db
-            hidden_dict ['h'+str(idx)] = dh
-            
+            dhout = dh
 
 
         ############################################################################
